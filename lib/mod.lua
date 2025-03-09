@@ -6,7 +6,7 @@ ArcDate.__index = ArcDate
 function ArcDate.new(id, serial, name, dev)
   local device = setmetatable({}, ArcDate)
   device.quads = {}
-  device.dirty = true
+  device.dirty = { true, true, true, true }
   for _=1,4 do
     local quad = {}
     for _=1,64 do
@@ -42,72 +42,98 @@ function ArcDate.new(id, serial, name, dev)
 end
 
 function ArcDate:led(ring, x, val)
+  if x < 0 then
+    x = x + 65
+  end
+  if x == 0 then
+    x = 1
+  end
   self.quads[ring][x] = val
-  self.dirty = true
+  self.dirty[ring] = true
 end
 
 function ArcDate:all(val)
-  for _, quad in ipairs(self.quads) do
-    for i=1,64 do
-      quad[i] = val
+  for i, quad in ipairs(self.quads) do
+    for j=1,64 do
+      quad[j] = val
     end
+    self.dirty[i] = true
   end
-  self.dirty = true
 end
 
 function ArcDate:refresh()
   for i, quad in ipairs(self.quads) do
-    local data = ''
-    for j=1,64 do
-      data = data .. string.char((0xf & quad[j]) + 48)
+    if self.dirty[i] then
+      local data = ''
+      for j=1,64 do
+        data = data .. string.char((0xf & quad[j]) + 48)
+      end
+      local msg = "arc: map "..string.char((0x3&(i-1))+48).." "..data
+      playdate.send(msg)
+      self.dirty[i] = false
     end
-    local msg = "~arc: map "..string.char((0x3&(i-1))+48).." "..data
-    playdate.send(msg)
   end
-  self.dirty = false
 end
 
 function ArcDate:segment(ring, from, to, level)
   arc.segment(self, ring, from, to, level)
 end
 
-mod.hook.register("system_post_startup", "init playdate arc handlers", function()
-  local function connect_playdate_arc(id, name, dev)
-    local g = ArcDate.new(id, name, "", dev)
-    arc.devices[id] = g
-    arc.update_devices()
-    if arc.add ~= nil then arc.add(g) end
+local function connect_playdate_arc(id, name, dev)
+  print("playdate arc add: "..id)
+  local g = ArcDate.new(id, name, "", dev)
+  arc.devices[id] = g
+  arc.update_devices()
+  if arc.add ~= nil then arc.add(g) end
+end
+
+local function remove_playdate_arc(id)
+  print("playdate arc remove: "..id)
+  local g = arc.devices[id]
+  if g then
+    if arc.vports[g.port].remove then
+      arc.vports[g.port].remove()
+    end
+    if arc.remove then
+      arc.remove(arc.devices[id])
+    end
   end
-  
-  table.insert(_norns.playdate.add_hooks, function(id, name, dev)
-    print("adding playdate arc")
-    connect_playdate_arc(id, name, dev)
+  arc.devices[id] = nil
+  arc.update_devices()
+end
+
+local arc_date_connected = false
+
+local function handle_playdate_arc_event(id, msg)
+  local prefix = msg:sub(1, 9)
+  if prefix == "arc: mod " then
+    local s = tonumber(msg:sub(10, 10))
+    if s then
+      connect_playdate_arc(id, "Playdate", playdate.dev)
+    else
+      remove_playdate_arc(id)
+    end
+  elseif prefix == "arc: enc " then
+    local n = tonumber(msg:sub(10, 10))
+    local delta = tonumber(msg:sub(12, #msg))
+    _norns.arc.delta(id, n+1, delta)
+  elseif prefix == "arc: key " then
+    local n = tonumber(msg:sub(10, 10))
+    local s = tonumber(msg:sub(12, 12))
+    _norns.arc.key(id, n+1, s)
+  end
+end
+
+mod.hook.register("system_pre_device_scan", "init playdate arc handlers", function()
+  _norns.playdate.mod_add:register("playdate arc add", function(id, name, dev)
+    playdate.send("arc: mod?")
   end)
   
-  table.insert(_norns.playdate.remove_hooks, function(id)
-    print("removing playdate arc")
-    local g = arc.devices[id]
-    if g then
-      if arc.vports[g.port].remove then
-        arc.vports[g.port].remove()
-      end
-      if arc.remove then
-        arc.remove(arc.devices[id])
-      end
-    end
-    arc.devices[id] = nil
-    arc.update_devices()
+  _norns.playdate.mod_remove:register("playdate arc remove", function(id)
+    remove_playdate_arc(id)
   end)
   
-  table.insert(_norns.playdate.event_hooks, function(id, msg)
-    if msg:sub(1, 11) == "~~arc: enc " then
-      local n = tonumber(msg:sub(12, 12))
-      local delta = tonumber(msg:sub(14, #msg))
-      _norns.arc.delta(id, n+1, delta)
-    elseif msg:sub(1, 11) == "~~arc: key " then
-      local n = tonumber(msg:sub(12, 12))
-      local s = tonumber(msg:sub(14, 14))
-      _norns.arc.key(id, n+1, s)
-    end
+  _norns.playdate.mod_event:register("playdate arc event", function(id, line)
+    handle_playdate_arc_event(id, line)
   end)
 end)
