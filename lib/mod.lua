@@ -124,7 +124,7 @@ local function handle_playdate_arc_event(id, msg)
   end
 end
 
-mod.hook.register("system_pre_device_scan", "init playdate arc handlers", function()
+mod.hook.register("system_post_startup", "playdate arc emulation", function()
   _norns.playdate.mod_add:register("playdate arc add", function(id, name, dev)
     playdate.send("arc: mod?")
   end)
@@ -136,4 +136,7 @@ mod.hook.register("system_pre_device_scan", "init playdate arc handlers", functi
   _norns.playdate.mod_event:register("playdate arc event", function(id, line)
     handle_playdate_arc_event(id, line)
   end)
+  
+  playdate.send("arc: mod?")
 end)
+
